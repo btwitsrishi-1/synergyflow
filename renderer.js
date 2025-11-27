@@ -32,66 +32,137 @@ ipcRenderer.on('update-state', (event, state) => {
     neighbors = state.neighbors;
 });
 
-ipcRenderer.on('spawn-particle', (event, { x, y, vx, vy }) => {
+ipcRenderer.on('spawn-particle', (event, { x, y, vx, vy, behavior, offset, hue }) => {
+    // Receiving data: The particle has crossed the boundary.
     const p = new Particle(x, y, 'flare');
     p.vx = vx;
     p.vy = vy;
-    p.life = 1.0; // Reset life
+    p.life = 1.0;
+    p.behavior = 'absorbing'; // Flow to center
+    p.offset = offset || 0;
+    p.hue = hue || baseHue; // Use source color
     particles.push(p);
 });
 
 // --- Particle Class ---
 class Particle {
-    constructor(x, y, type) {
+    constructor(x, y, type, behavior = 'halo') {
         this.x = x;
         this.y = y;
-        this.type = type; // 'ball' or 'flare'
+        this.type = type;
         this.char = Math.random() > 0.5 ? '0' : '1';
+        this.behavior = behavior; // 'halo', 'flow', 'absorbing'
+        this.offset = Math.random() * 100;
+        this.initialLife = 1.0;
+        this.life = 1.0;
+        this.decay = Math.random() * 0.01 + 0.005;
+        this.hue = baseHue; // Default to local hue
 
         // Initial Physics
         const angle = Math.random() * Math.PI * 2;
         const speed = (Math.random() * 2 + 1) * speedMultiplier;
-        this.vx = Math.cos(angle) * speed;
-        this.vy = Math.sin(angle) * speed;
 
-        this.life = 1.0;
-        this.decay = Math.random() * 0.01 + 0.005;
+        if (this.behavior === 'halo') {
+            this.vx = Math.cos(angle) * speed * 0.5;
+            this.vy = Math.sin(angle) * speed * 0.5;
+        } else if (this.behavior === 'flow') {
+            // Initial upward/outward burst for tentacles
+            this.vx = (Math.random() - 0.5) * 2;
+            this.vy = -Math.random() * 5 - 2; // Upward burst
+        } else {
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+        }
 
         // Trail
         this.history = [];
         this.maxHistory = 10;
     }
 
-    update() {
-        // Apply Global Gravity (Attraction to other windows)
-        this.vx += globalGravity.x * 0.05; // Scale force
-        this.vy += globalGravity.y * 0.05;
+    update(time) {
+        const centerX = width / 2;
+        const centerY = height / 2;
+
+        if (this.behavior === 'halo') {
+            // Halo Behavior: Contained within radius
+            const dx = this.x - centerX;
+            const dy = this.y - centerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const radius = 80;
+
+            if (dist > radius) {
+                const force = (dist - radius) * 0.05;
+                this.vx -= (dx / dist) * force;
+                this.vy -= (dy / dist) * force;
+            }
+            this.vx += (dy / dist) * 0.1;
+            this.vy -= (dx / dist) * 0.1;
+            this.vx *= 0.98;
+            this.vy *= 0.98;
+
+        } else if (this.behavior === 'flow') {
+            // Flow Behavior: Tentacles
+            const age = 1.0 - this.life;
+            const basePhase = 0.3;
+
+            if (age < basePhase) {
+                // BASE PHASE: Stable
+                this.vy -= 0.1;
+                this.vx *= 0.95;
+                this.vy *= 0.95;
+            } else {
+                // TIP PHASE: Attracted to neighbors
+                this.vx += globalGravity.x * 0.35; // Stronger pull for "clearer" connection
+                this.vy += globalGravity.y * 0.35;
+
+                // Wiggle for tentacle look
+                let angle = Math.atan2(this.vy, this.vx);
+                const wiggle = Math.sin(time * 0.1 + this.offset) * 0.5;
+                this.vx += Math.cos(angle + Math.PI / 2) * wiggle;
+                this.vy += Math.sin(angle + Math.PI / 2) * wiggle;
+            }
+
+        } else if (this.behavior === 'absorbing') {
+            // Absorbing Behavior: Flow INTO the center
+            const dx = centerX - this.x;
+            const dy = centerY - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // Intertwining: Add spiral motion
+            // We want it to look like it's twisting around the incoming path.
+            // Tangential force perpendicular to direction to center.
+            const tangentX = -dy / dist;
+            const tangentY = dx / dist;
+
+            // Wiggle/Spiral
+            const spiral = Math.sin(time * 0.2 + this.offset) * 2.0;
+
+            if (dist > 20) {
+                this.vx += (dx / dist) * 0.5; // Attraction
+                this.vy += (dy / dist) * 0.5;
+
+                this.vx += tangentX * spiral * 0.1; // Spiral
+                this.vy += tangentY * spiral * 0.1;
+            } else {
+                this.life -= 0.1;
+            }
+            this.vx *= 0.95;
+            this.vy *= 0.95;
+        }
 
         this.x += this.vx;
         this.y += this.vy;
 
         // Boundary Check & Transfer Logic
-        let bounced = false;
-
-        // Check Left
-        if (this.x < 0) {
-            if (this.tryTransfer()) return true; // Transferred, remove from here
-            this.x = 0; this.vx *= -1; bounced = true;
-        }
-        // Check Right
-        else if (this.x > width) {
-            if (this.tryTransfer()) return true;
-            this.x = width; this.vx *= -1; bounced = true;
-        }
-        // Check Top
-        if (this.y < 0) {
-            if (this.tryTransfer()) return true;
-            this.y = 0; this.vy *= -1; bounced = true;
-        }
-        // Check Bottom
-        else if (this.y > height) {
-            if (this.tryTransfer()) return true;
-            this.y = height; this.vy *= -1; bounced = true;
+        if (this.behavior === 'flow') {
+            let bounced = false;
+            if (this.x < 0) { if (this.tryTransfer()) return true; this.x = 0; this.vx *= -1; bounced = true; }
+            else if (this.x > width) { if (this.tryTransfer()) return true; this.x = width; this.vx *= -1; bounced = true; }
+            if (this.y < 0) { if (this.tryTransfer()) return true; this.y = 0; this.vy *= -1; bounced = true; }
+            else if (this.y > height) { if (this.tryTransfer()) return true; this.y = height; this.vy *= -1; bounced = true; }
+        } else if (this.behavior !== 'absorbing') {
+            if (this.x < 0 || this.x > width) this.vx *= -1;
+            if (this.y < 0 || this.y > height) this.vy *= -1;
         }
 
         // Trail history
@@ -105,15 +176,15 @@ class Particle {
     }
 
     tryTransfer() {
-        // Simple heuristic: if we have a strong pull in this direction, transfer.
-        // Or better: just send it to main process to check if it lands in another window.
-        // We send it if there is ANY neighbor, main process decides validity.
         if (neighbors.length > 0) {
             ipcRenderer.send('particle-exit', {
                 x: this.x,
                 y: this.y,
                 vx: this.vx,
-                vy: this.vy
+                vy: this.vy,
+                behavior: this.behavior,
+                offset: this.offset,
+                hue: this.hue // Pass color
             });
             return true; // Remove from local
         }
@@ -127,12 +198,12 @@ class Particle {
         for (let i = 0; i < this.history.length; i++) {
             const pos = this.history[i];
             const alpha = (i / this.history.length) * this.life * 0.5;
-            ctx.fillStyle = `hsla(${baseHue}, 100%, 50%, ${alpha})`;
+            ctx.fillStyle = `hsla(${this.hue}, 100%, 50%, ${alpha})`; // Use instance hue
             ctx.fillText(this.char, pos.x, pos.y);
         }
 
         // Draw head
-        ctx.fillStyle = `hsla(${baseHue}, 100%, 70%, ${this.life})`;
+        ctx.fillStyle = `hsla(${this.hue}, 100%, 70%, ${this.life})`;
         ctx.fillText(this.char, this.x, this.y);
     }
 }
@@ -143,32 +214,55 @@ class EnergyBall {
         this.x = width / 2;
         this.y = height / 2;
         this.angle = 0;
+        this.time = 0;
     }
 
     update() {
-        // Centered Ball - No movement of the core itself
         this.x = width / 2;
         this.y = height / 2;
-
-        // Flares still rotate/move
         this.angle += 0.02 * speedMultiplier;
+        this.time++;
 
-        // Emit particles
-        // Emit more if there is strong gravity (excitement)
         const excitement = Math.abs(globalGravity.x) + Math.abs(globalGravity.y);
-        const count = 5 * complexity + Math.floor(excitement * 2);
+        const count = 1 * complexity + Math.floor(excitement * 0.5);
 
         for (let i = 0; i < count; i++) {
-            const p = new Particle(this.x, this.y, 'flare');
-            // Bias initial velocity towards gravity
-            p.vx += globalGravity.x * 2;
-            p.vy += globalGravity.y * 2;
-            particles.push(p);
+            // 50% Halo, 50% Flow (if neighbors exist)
+            if (neighbors.length > 0 && Math.random() > 0.5) {
+                // Spawn Flow Particle (Tentacle)
+                const angle = Math.random() * Math.PI * 2;
+                const r = 60;
+                const sx = this.x + Math.cos(angle) * r;
+                const sy = this.y + Math.sin(angle) * r;
+
+                const p = new Particle(sx, sy, 'flare', 'flow');
+
+                // Handshaking: Target a specific neighbor
+                const target = neighbors[Math.floor(Math.random() * neighbors.length)];
+                const tx = target.dx / target.dist;
+                const ty = target.dy / target.dist;
+
+                // Initial velocity towards target
+                p.vx = tx * 8;
+                p.vy = ty * 8;
+
+                p.offset = this.time * 0.2;
+                particles.push(p);
+
+            } else {
+                // Spawn Halo Particle
+                const r = Math.random() * 60;
+                const angle = Math.random() * Math.PI * 2;
+                const sx = this.x + Math.cos(angle) * r;
+                const sy = this.y + Math.sin(angle) * r;
+
+                const p = new Particle(sx, sy, 'flare', 'halo');
+                particles.push(p);
+            }
         }
     }
 
     draw(ctx) {
-        // Draw core glow
         const gradient = ctx.createRadialGradient(this.x, this.y, 10, this.x, this.y, 60);
         gradient.addColorStop(0, `hsla(${baseHue}, 100%, 80%, 0.8)`);
         gradient.addColorStop(1, `hsla(${baseHue}, 100%, 50%, 0)`);
@@ -182,8 +276,9 @@ class EnergyBall {
 const ball = new EnergyBall();
 
 // --- Animation Loop ---
+let frame = 0;
 function animate() {
-    // Fade out effect for trails
+    frame++;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
     ctx.fillRect(0, 0, width, height);
 
@@ -192,7 +287,7 @@ function animate() {
 
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
-        const removed = p.update();
+        const removed = p.update(frame);
         if (removed || p.life <= 0) {
             particles.splice(i, 1);
         } else {

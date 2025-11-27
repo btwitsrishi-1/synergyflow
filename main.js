@@ -59,67 +59,6 @@ function createWindow(queryParams = {}, posOverride = null) {
   if (Object.keys(queryParams).length > 0) {
     fileUrl += `?${params.toString()}`;
   }
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
-const path = require('path');
-
-// --- Advanced Window Management ---
-const windows = new Map(); // id -> { window, bounds }
-
-function registerWindow(win) {
-  const id = win.id;
-  windows.set(id, { window: win, bounds: win.getBounds() });
-
-  win.on('move', () => {
-    if (windows.has(id)) {
-      windows.get(id).bounds = win.getBounds();
-    }
-  });
-
-  win.on('resize', () => {
-    if (windows.has(id)) {
-      windows.get(id).bounds = win.getBounds();
-    }
-  });
-
-  win.on('closed', () => {
-    windows.delete(id);
-  });
-}
-
-function createWindow(queryParams = {}, posOverride = null) {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-
-  // Randomize initial position slightly if not specified, or center
-  let x = Math.floor(Math.random() * (width - 800));
-  let y = Math.floor(Math.random() * (height - 600));
-
-  if (posOverride) {
-    x = posOverride.x;
-    y = posOverride.y;
-  }
-
-  const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
-    x: x,
-    y: y,
-    frame: true,
-    transparent: false,
-    backgroundColor: '#000000',
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
-    }
-  });
-
-  registerWindow(mainWindow);
-
-  // Construct URL with query params
-  let fileUrl = `file://${path.join(__dirname, 'index.html')}`;
-  const params = new URLSearchParams(queryParams);
-  if (Object.keys(queryParams).length > 0) {
-    fileUrl += `?${params.toString()}`;
-  }
 
   mainWindow.loadURL(fileUrl);
 }
@@ -143,7 +82,7 @@ ipcMain.on('spawn-ball', (event, arg) => {
   createWindow({ hue, speed, complexity });
 });
 
-ipcMain.on('particle-exit', (event, { x, y, vx, vy }) => {
+ipcMain.on('particle-exit', (event, { x, y, vx, vy, behavior, offset, hue }) => {
   const senderId = event.sender.id;
   const senderBounds = windows.get(senderId)?.bounds;
   if (!senderBounds) return;
@@ -164,7 +103,7 @@ ipcMain.on('particle-exit', (event, { x, y, vx, vy }) => {
       const relX = absX - b.x;
       const relY = absY - b.y;
 
-      data.window.webContents.send('spawn-particle', { x: relX, y: relY, vx, vy });
+      data.window.webContents.send('spawn-particle', { x: relX, y: relY, vx, vy, behavior, offset, hue });
       return; // Transferred
     }
   }
