@@ -1,0 +1,27 @@
+body {
+    margin: 0;
+    overflow: hidden;
+    background-color: black;
+}
+
+canvas {
+    display: block;
+}
+
+#spawnBtn {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    padding: 10px 20px;
+    background: rgba(0, 255, 0, 0.2);
+    border: 1px solid #00ff00;
+    color: #00ff00;
+    cursor: pointer;
+    font-family: monospace;
+    z-index: 100;
+    transition: background 0.3s;
+}
+
+#spawnBtn:hover {
+    background: rgba(0, 255, 0, 0.5);
+}
