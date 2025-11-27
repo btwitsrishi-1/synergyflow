@@ -89,7 +89,7 @@ self.onconnect = (e) => {
     console.log(`Client ${id} connected`);
 };
 
-function handleParticleExit(senderId, { x, y, vx, vy }) {
+function handleParticleExit(senderId, { x, y, vx, vy, behavior, offset, hue }) {
     const sender = Array.from(connections.values()).find(c => c.id === senderId);
     if (!sender) return;
 
@@ -108,7 +108,7 @@ function handleParticleExit(senderId, { x, y, vx, vy }) {
 
             target.port.postMessage({
                 type: 'spawn-particle',
-                payload: { x: relX, y: relY, vx, vy }
+                payload: { x: relX, y: relY, vx, vy, behavior, offset, hue }
             });
             return;
         }
