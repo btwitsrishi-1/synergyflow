@@ -16,6 +16,47 @@ const complexity = parseInt(params.get('complexity')) || 1;
 let globalGravity = { x: 0, y: 0 };
 let neighbors = [];
 
+// --- Audio Reactivity ---
+let audioContext, analyser, dataArray;
+let globalAudio = { bass: 0, mid: 0, treble: 0, volume: 0 };
+
+async function initAudio() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+        analyser.fftSize = 256;
+        const bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+    } catch (e) {
+        console.warn('Audio input failed or denied:', e);
+    }
+}
+initAudio();
+
+function updateAudio() {
+    if (!analyser) return;
+    analyser.getByteFrequencyData(dataArray);
+
+    // Simple frequency banding
+    let bassSum = 0, midSum = 0, trebleSum = 0;
+    const binCount = dataArray.length;
+
+    for (let i = 0; i < binCount; i++) {
+        const val = dataArray[i] / 255.0;
+        if (i < binCount * 0.1) bassSum += val;
+        else if (i < binCount * 0.5) midSum += val;
+        else trebleSum += val;
+    }
+
+    globalAudio.bass = bassSum / (binCount * 0.1);
+    globalAudio.mid = midSum / (binCount * 0.4);
+    globalAudio.treble = trebleSum / (binCount * 0.5);
+    globalAudio.volume = (bassSum + midSum + trebleSum) / binCount;
+}
+
 // --- Resize Handling ---
 function resize() {
     width = window.innerWidth;
@@ -33,16 +74,92 @@ ipcRenderer.on('update-state', (event, state) => {
 });
 
 ipcRenderer.on('spawn-particle', (event, { x, y, vx, vy, behavior, offset, hue }) => {
-    // Receiving data: The particle has crossed the boundary.
     const p = new Particle(x, y, 'flare');
     p.vx = vx;
     p.vy = vy;
     p.life = 1.0;
-    p.behavior = 'absorbing'; // Flow to center
+    p.behavior = 'absorbing';
     p.offset = offset || 0;
-    p.hue = hue || baseHue; // Use source color
+    p.hue = hue || baseHue;
     particles.push(p);
 });
+
+// --- Visual Effects ---
+
+function drawBackgroundGrid(ctx) {
+    const spacing = 40;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const time = performance.now() * 0.001;
+
+    ctx.strokeStyle = `hsla(${baseHue}, 50%, 20%, 0.2)`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (let x = 0; x <= width; x += spacing) {
+        for (let y = 0; y <= height; y += spacing) {
+            // Distortion Logic (Gravity Well)
+            const dx = x - centerX;
+            const dy = y - centerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // Pull towards center
+            // Stronger pull closer to center
+            const pull = Math.max(0, (1 - dist / 600) * 20 * (1 + globalAudio.bass));
+
+            const distFactor = dist > 0 ? 1 : 0;
+            const gx = x - (dx / dist) * pull * distFactor;
+            const gy = y - (dy / dist) * pull * distFactor;
+
+            // Draw small cross or dot
+            ctx.moveTo(gx - 2, gy);
+            ctx.lineTo(gx + 2, gy);
+            ctx.moveTo(gx, gy - 2);
+            ctx.lineTo(gx, gy + 2);
+        }
+    }
+    ctx.stroke();
+}
+
+function drawLightning(ctx, startX, startY, endX, endY, intensity) {
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 10) return;
+
+    const steps = Math.floor(dist / 10);
+    let currX = startX;
+    let currY = startY;
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+
+    for (let i = 0; i < steps; i++) {
+        const t = (i + 1) / steps;
+        const targetX = startX + dx * t;
+        const targetY = startY + dy * t;
+
+        // Jitter perpendicular to direction
+        const jitter = (Math.random() - 0.5) * 20 * intensity;
+        // Perpendicular vector (-dy, dx)
+        const perpX = -dy / dist;
+        const perpY = dx / dist;
+
+        currX = targetX + perpX * jitter;
+        currY = targetY + perpY * jitter;
+
+        ctx.lineTo(currX, currY);
+    }
+    ctx.lineTo(endX, endY);
+
+    ctx.shadowBlur = 20 * intensity;
+    ctx.shadowColor = `hsla(${baseHue}, 100%, 80%, 0.8)`;
+    ctx.strokeStyle = `hsla(${baseHue}, 100%, 90%, ${intensity})`;
+    ctx.lineWidth = 2 * intensity;
+    ctx.stroke();
+    ctx.shadowBlur = 0; // Reset
+}
 
 // --- Particle Class ---
 class Particle {
@@ -50,15 +167,14 @@ class Particle {
         this.x = x;
         this.y = y;
         this.type = type;
-        this.char = Math.random() > 0.5 ? '0' : '1';
-        this.behavior = behavior; // 'halo', 'flow', 'absorbing'
+        this.char = Math.floor(Math.random() * 10).toString(); // Random digit 0-9
+        this.behavior = behavior;
         this.offset = Math.random() * 100;
         this.initialLife = 1.0;
         this.life = 1.0;
         this.decay = Math.random() * 0.01 + 0.005;
-        this.hue = baseHue; // Default to local hue
+        this.hue = baseHue;
 
-        // Initial Physics
         const angle = Math.random() * Math.PI * 2;
         const speed = (Math.random() * 2 + 1) * speedMultiplier;
 
@@ -66,15 +182,13 @@ class Particle {
             this.vx = Math.cos(angle) * speed * 0.5;
             this.vy = Math.sin(angle) * speed * 0.5;
         } else if (this.behavior === 'flow') {
-            // Initial upward/outward burst for tentacles
             this.vx = (Math.random() - 0.5) * 2;
-            this.vy = -Math.random() * 5 - 2; // Upward burst
+            this.vy = -Math.random() * 5 - 2;
         } else {
             this.vx = Math.cos(angle) * speed;
             this.vy = Math.sin(angle) * speed;
         }
 
-        // Trail
         this.history = [];
         this.maxHistory = 10;
     }
@@ -83,65 +197,58 @@ class Particle {
         const centerX = width / 2;
         const centerY = height / 2;
 
+        // Audio Reactivity: Shimmer/Speed
+        const shimmer = 1 + globalAudio.treble * 0.5;
+
         if (this.behavior === 'halo') {
-            // Halo Behavior: Contained within radius
             const dx = this.x - centerX;
             const dy = this.y - centerY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const radius = 80;
+
+            // Audio Reactivity: Pulse Radius
+            const radius = 80 + globalAudio.bass * 40;
 
             if (dist > radius) {
                 const force = (dist - radius) * 0.05;
                 this.vx -= (dx / dist) * force;
                 this.vy -= (dy / dist) * force;
             }
-            this.vx += (dy / dist) * 0.1;
-            this.vy -= (dx / dist) * 0.1;
+            this.vx += (dy / dist) * 0.1 * shimmer;
+            this.vy -= (dx / dist) * 0.1 * shimmer;
             this.vx *= 0.98;
             this.vy *= 0.98;
 
         } else if (this.behavior === 'flow') {
-            // Flow Behavior: Tentacles
             const age = 1.0 - this.life;
             const basePhase = 0.3;
 
             if (age < basePhase) {
-                // BASE PHASE: Stable
                 this.vy -= 0.1;
                 this.vx *= 0.95;
                 this.vy *= 0.95;
             } else {
-                // TIP PHASE: Attracted to neighbors
-                this.vx += globalGravity.x * 0.35; // Stronger pull for "clearer" connection
+                this.vx += globalGravity.x * 0.35;
                 this.vy += globalGravity.y * 0.35;
 
-                // Wiggle for tentacle look
                 let angle = Math.atan2(this.vy, this.vx);
-                const wiggle = Math.sin(time * 0.1 + this.offset) * 0.5;
+                const wiggle = Math.sin(time * 0.1 + this.offset) * 0.5 * shimmer;
                 this.vx += Math.cos(angle + Math.PI / 2) * wiggle;
                 this.vy += Math.sin(angle + Math.PI / 2) * wiggle;
             }
 
         } else if (this.behavior === 'absorbing') {
-            // Absorbing Behavior: Flow INTO the center
             const dx = centerX - this.x;
             const dy = centerY - this.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // Intertwining: Add spiral motion
-            // We want it to look like it's twisting around the incoming path.
-            // Tangential force perpendicular to direction to center.
             const tangentX = -dy / dist;
             const tangentY = dx / dist;
-
-            // Wiggle/Spiral
             const spiral = Math.sin(time * 0.2 + this.offset) * 2.0;
 
             if (dist > 20) {
-                this.vx += (dx / dist) * 0.5; // Attraction
+                this.vx += (dx / dist) * 0.5;
                 this.vy += (dy / dist) * 0.5;
-
-                this.vx += tangentX * spiral * 0.1; // Spiral
+                this.vx += tangentX * spiral * 0.1;
                 this.vy += tangentY * spiral * 0.1;
             } else {
                 this.life -= 0.1;
@@ -153,7 +260,6 @@ class Particle {
         this.x += this.vx;
         this.y += this.vy;
 
-        // Boundary Check & Transfer Logic
         if (this.behavior === 'flow') {
             let bounced = false;
             if (this.x < 0) { if (this.tryTransfer()) return true; this.x = 0; this.vx *= -1; bounced = true; }
@@ -165,14 +271,13 @@ class Particle {
             if (this.y < 0 || this.y > height) this.vy *= -1;
         }
 
-        // Trail history
         this.history.push({ x: this.x, y: this.y });
         if (this.history.length > this.maxHistory) {
             this.history.shift();
         }
 
         this.life -= this.decay;
-        return false; // Not removed
+        return false;
     }
 
     tryTransfer() {
@@ -184,9 +289,9 @@ class Particle {
                 vy: this.vy,
                 behavior: this.behavior,
                 offset: this.offset,
-                hue: this.hue // Pass color
+                hue: this.hue
             });
-            return true; // Remove from local
+            return true;
         }
         return false;
     }
@@ -194,16 +299,20 @@ class Particle {
     draw(ctx) {
         ctx.font = '14px monospace';
 
-        // Draw trail
+        // Rapidly changing digits
+        this.char = Math.floor(Math.random() * 10).toString();
+
+        // Audio Reactivity: Brightness
+        const brightness = 50 + globalAudio.mid * 20;
+
         for (let i = 0; i < this.history.length; i++) {
             const pos = this.history[i];
             const alpha = (i / this.history.length) * this.life * 0.5;
-            ctx.fillStyle = `hsla(${this.hue}, 100%, 50%, ${alpha})`; // Use instance hue
+            ctx.fillStyle = `hsla(${this.hue}, 100%, ${brightness}%, ${alpha})`;
             ctx.fillText(this.char, pos.x, pos.y);
         }
 
-        // Draw head
-        ctx.fillStyle = `hsla(${this.hue}, 100%, 70%, ${this.life})`;
+        ctx.fillStyle = `hsla(${this.hue}, 100%, ${brightness + 20}%, ${this.life})`;
         ctx.fillText(this.char, this.x, this.y);
     }
 }
@@ -213,36 +322,71 @@ class EnergyBall {
     constructor() {
         this.x = width / 2;
         this.y = height / 2;
-        this.angle = 0;
         this.time = 0;
+        this.coreParticles = [];
+        // Initialize core particles
+        for (let i = 0; i < 300; i++) {
+            this.coreParticles.push({
+                x: (Math.random() - 0.5) * 100, // Relative to center
+                y: (Math.random() - 0.5) * 100,
+                vx: (Math.random() - 0.5) * 2,
+                vy: (Math.random() - 0.5) * 2,
+                char: Math.floor(Math.random() * 10).toString()
+            });
+        }
     }
 
     update() {
         this.x = width / 2;
         this.y = height / 2;
-        this.angle += 0.02 * speedMultiplier;
         this.time++;
 
+        // Audio Reactivity: Pulse Radius
+        const pulse = 10 + globalAudio.bass * 10;
+        const outerRadius = 60 + globalAudio.bass * 30;
+
+        // Update Core Particles
+        this.coreParticles.forEach(p => {
+            // Jitter
+            p.x += p.vx;
+            p.y += p.vy;
+
+            // Containment
+            const dist = Math.sqrt(p.x * p.x + p.y * p.y);
+            if (dist > outerRadius) {
+                p.x *= 0.9;
+                p.y *= 0.9;
+                p.vx *= -1;
+                p.vy *= -1;
+            }
+
+            // Random movement
+            p.vx += (Math.random() - 0.5) * 0.2;
+            p.vy += (Math.random() - 0.5) * 0.2;
+            p.vx *= 0.95;
+            p.vy *= 0.95;
+
+            // Rapidly change char
+            p.char = Math.floor(Math.random() * 10).toString();
+        });
+
         const excitement = Math.abs(globalGravity.x) + Math.abs(globalGravity.y);
-        const count = 1 * complexity + Math.floor(excitement * 0.5);
+        const audioFactor = 1 + globalAudio.volume * 2;
+        const count = (1 * complexity + Math.floor(excitement * 0.5)) * audioFactor;
 
         for (let i = 0; i < count; i++) {
-            // 50% Halo, 50% Flow (if neighbors exist)
             if (neighbors.length > 0 && Math.random() > 0.5) {
-                // Spawn Flow Particle (Tentacle)
                 const angle = Math.random() * Math.PI * 2;
-                const r = 60;
+                const r = outerRadius;
                 const sx = this.x + Math.cos(angle) * r;
                 const sy = this.y + Math.sin(angle) * r;
 
                 const p = new Particle(sx, sy, 'flare', 'flow');
 
-                // Handshaking: Target a specific neighbor
                 const target = neighbors[Math.floor(Math.random() * neighbors.length)];
                 const tx = target.dx / target.dist;
                 const ty = target.dy / target.dist;
 
-                // Initial velocity towards target
                 p.vx = tx * 8;
                 p.vy = ty * 8;
 
@@ -250,8 +394,7 @@ class EnergyBall {
                 particles.push(p);
 
             } else {
-                // Spawn Halo Particle
-                const r = Math.random() * 60;
+                const r = Math.random() * outerRadius;
                 const angle = Math.random() * Math.PI * 2;
                 const sx = this.x + Math.cos(angle) * r;
                 const sy = this.y + Math.sin(angle) * r;
@@ -263,13 +406,17 @@ class EnergyBall {
     }
 
     draw(ctx) {
-        const gradient = ctx.createRadialGradient(this.x, this.y, 10, this.x, this.y, 60);
-        gradient.addColorStop(0, `hsla(${baseHue}, 100%, 80%, 0.8)`);
-        gradient.addColorStop(1, `hsla(${baseHue}, 100%, 50%, 0)`);
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, 60, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.font = '16px monospace';
+        ctx.shadowBlur = 30 + globalAudio.treble * 20;
+        ctx.shadowColor = `hsla(${baseHue}, 100%, 50%, 0.8)`;
+
+        // Draw Core Particles
+        this.coreParticles.forEach(p => {
+            ctx.fillStyle = `hsla(${baseHue}, 100%, 80%, 0.9)`;
+            ctx.fillText(p.char, this.x + p.x, this.y + p.y);
+        });
+
+        ctx.shadowBlur = 0; // Reset
     }
 }
 
@@ -279,11 +426,28 @@ const ball = new EnergyBall();
 let frame = 0;
 function animate() {
     frame++;
+    updateAudio();
+
+    // Bloom Effect: Darken with low opacity to create trails/glow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
     ctx.fillRect(0, 0, width, height);
 
+    drawBackgroundGrid(ctx);
+
     ball.update();
     ball.draw(ctx);
+
+    // Draw Lightning to Neighbors
+    if (neighbors.length > 0) {
+        neighbors.forEach(n => {
+            // Threshold for lightning: Close enough
+            if (n.dist < 600) {
+                // Intensity based on proximity and audio
+                const intensity = (1 - n.dist / 600) * (0.5 + globalAudio.treble);
+                drawLightning(ctx, width / 2, height / 2, width / 2 + n.dx, height / 2 + n.dy, intensity);
+            }
+        });
+    }
 
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
