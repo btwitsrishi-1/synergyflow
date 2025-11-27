@@ -215,7 +215,7 @@ class Particle {
             const dx = this.x - centerX;
             const dy = this.y - centerY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const radius = 80 + globalAudio.bass * 40;
+            const radius = 120 + globalAudio.bass * 60;
 
             if (dist > radius) {
                 const force = (dist - radius) * 0.05;
@@ -236,8 +236,13 @@ class Particle {
                 this.vx *= 0.95;
                 this.vy *= 0.95;
             } else {
-                this.vx += globalGravity.x * 0.35;
-                this.vy += globalGravity.y * 0.35;
+                if (neighbors.length > 0) {
+                    this.vx += globalGravity.x * 0.35;
+                    this.vy += globalGravity.y * 0.35;
+                } else {
+                    this.vx += (Math.random() - 0.5) * 0.1;
+                    this.vy += (Math.random() - 0.5) * 0.1 - 0.05;
+                }
 
                 let angle = Math.atan2(this.vy, this.vx);
                 const wiggle = Math.sin(time * 0.1 + this.offset) * 0.5 * shimmer;
@@ -332,10 +337,10 @@ class EnergyBall {
         this.y = height / 2;
         this.time = 0;
         this.coreParticles = [];
-        for (let i = 0; i < 300; i++) {
+        for (let i = 0; i < 600; i++) {
             this.coreParticles.push({
-                x: (Math.random() - 0.5) * 100,
-                y: (Math.random() - 0.5) * 100,
+                x: (Math.random() - 0.5) * 200,
+                y: (Math.random() - 0.5) * 200,
                 vx: (Math.random() - 0.5) * 2,
                 vy: (Math.random() - 0.5) * 2,
                 char: Math.floor(Math.random() * 10).toString()
@@ -348,8 +353,8 @@ class EnergyBall {
         this.y = height / 2;
         this.time++;
 
-        const pulse = 10 + globalAudio.bass * 10;
-        const outerRadius = 60 + globalAudio.bass * 30;
+        const pulse = 20 + globalAudio.bass * 20;
+        const outerRadius = 120 + globalAudio.bass * 60;
 
         this.coreParticles.forEach(p => {
             p.x += p.vx;
@@ -376,7 +381,9 @@ class EnergyBall {
         const count = (1 * complexity + Math.floor(excitement * 0.5)) * audioFactor;
 
         for (let i = 0; i < count; i++) {
-            if (neighbors.length > 0 && Math.random() > 0.5) {
+            const spawnFlow = neighbors.length > 0 ? Math.random() > 0.5 : Math.random() > 0.7;
+
+            if (spawnFlow) {
                 const angle = Math.random() * Math.PI * 2;
                 const r = outerRadius;
                 const sx = this.x + Math.cos(angle) * r;
@@ -384,12 +391,16 @@ class EnergyBall {
 
                 const p = new Particle(sx, sy, 'flare', 'flow');
 
-                const target = neighbors[Math.floor(Math.random() * neighbors.length)];
-                const tx = target.dx / target.dist;
-                const ty = target.dy / target.dist;
-
-                p.vx = tx * 8;
-                p.vy = ty * 8;
+                if (neighbors.length > 0) {
+                    const target = neighbors[Math.floor(Math.random() * neighbors.length)];
+                    const tx = target.dx / target.dist;
+                    const ty = target.dy / target.dist;
+                    p.vx = tx * 8;
+                    p.vy = ty * 8;
+                } else {
+                    p.vx = Math.cos(angle) * 4;
+                    p.vy = Math.sin(angle) * 4;
+                }
 
                 p.offset = this.time * 0.2;
                 particles.push(p);
