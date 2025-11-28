@@ -80,14 +80,20 @@ worker.port.onmessage = (e) => {
         neighbors = data.neighbors;
     } else if (data.type === 'spawn-particle') {
         const { x, y, vx, vy, behavior, offset, hue } = data.payload;
-        const p = new Particle(x, y, 'flare');
-        p.vx = vx;
-        p.vy = vy;
-        p.life = 1.0;
-        p.behavior = 'absorbing'; // Flow to center
-        p.offset = offset || 0;
-        p.hue = hue || baseHue;
-        particles.push(p);
+
+        // 10% Chance to invade the core
+        if (Math.random() < 0.1) {
+            ball.addInvader(hue || baseHue);
+        } else {
+            const p = new Particle(x, y, 'flare');
+            p.vx = vx;
+            p.vy = vy;
+            p.life = 1.0;
+            p.behavior = 'absorbing';
+            p.offset = offset || 0;
+            p.hue = hue || baseHue;
+            particles.push(p);
+        }
     }
 };
 
@@ -176,7 +182,7 @@ function drawLightning(ctx, startX, startY, endX, endY, intensity) {
 
 // --- Particle Class ---
 class Particle {
-    constructor(x, y, type, behavior = 'halo') {
+    constructor(x, y, type, behavior = 'halo', hue = baseHue) {
         this.x = x;
         this.y = y;
         this.type = type;
@@ -186,7 +192,7 @@ class Particle {
         this.initialLife = 1.0;
         this.life = 1.0;
         this.decay = Math.random() * 0.01 + 0.005;
-        this.hue = baseHue;
+        this.hue = hue;
 
         const angle = Math.random() * Math.PI * 2;
         const speed = (Math.random() * 2 + 1) * speedMultiplier;
@@ -337,15 +343,30 @@ class EnergyBall {
         this.y = height / 2;
         this.time = 0;
         this.coreParticles = [];
-        for (let i = 0; i < 600; i++) {
+
+        for (let i = 0; i < 1000; i++) {
             this.coreParticles.push({
                 x: (Math.random() - 0.5) * 200,
                 y: (Math.random() - 0.5) * 200,
                 vx: (Math.random() - 0.5) * 2,
                 vy: (Math.random() - 0.5) * 2,
-                char: Math.floor(Math.random() * 10).toString()
+                char: Math.floor(Math.random() * 10).toString(),
+                hue: baseHue,
+                retention: 0
             });
         }
+    }
+
+    addInvader(hue) {
+        this.coreParticles.push({
+            x: (Math.random() - 0.5) * 200,
+            y: (Math.random() - 0.5) * 200,
+            vx: (Math.random() - 0.5) * 2,
+            vy: (Math.random() - 0.5) * 2,
+            char: Math.floor(Math.random() * 10).toString(),
+            hue: hue,
+            retention: 600 // ~10 seconds
+        });
     }
 
     update() {
@@ -353,10 +374,15 @@ class EnergyBall {
         this.y = height / 2;
         this.time++;
 
-        const pulse = 20 + globalAudio.bass * 20;
         const outerRadius = 120 + globalAudio.bass * 60;
 
-        this.coreParticles.forEach(p => {
+        for (let i = this.coreParticles.length - 1; i >= 0; i--) {
+            const p = this.coreParticles[i];
+
+            if (p.retention > 0) {
+                p.retention--;
+            }
+
             p.x += p.vx;
             p.y += p.vy;
 
@@ -374,7 +400,20 @@ class EnergyBall {
             p.vy *= 0.95;
 
             p.char = Math.floor(Math.random() * 10).toString();
-        });
+        }
+
+        const nativeCount = this.coreParticles.filter(p => p.hue === baseHue).length;
+        if (nativeCount < 1000) {
+            this.coreParticles.push({
+                x: (Math.random() - 0.5) * 200,
+                y: (Math.random() - 0.5) * 200,
+                vx: (Math.random() - 0.5) * 2,
+                vy: (Math.random() - 0.5) * 2,
+                char: Math.floor(Math.random() * 10).toString(),
+                hue: baseHue,
+                retention: 0
+            });
+        }
 
         const excitement = Math.abs(globalGravity.x) + Math.abs(globalGravity.y);
         const audioFactor = 1 + globalAudio.volume * 2;
@@ -384,26 +423,32 @@ class EnergyBall {
             const spawnFlow = neighbors.length > 0 ? Math.random() > 0.5 : Math.random() > 0.7;
 
             if (spawnFlow) {
-                const angle = Math.random() * Math.PI * 2;
-                const r = outerRadius;
-                const sx = this.x + Math.cos(angle) * r;
-                const sy = this.y + Math.sin(angle) * r;
+                const freeParticles = this.coreParticles.filter(p => p.retention <= 0);
 
-                const p = new Particle(sx, sy, 'flare', 'flow');
+                if (freeParticles.length > 0) {
+                    const source = freeParticles[Math.floor(Math.random() * freeParticles.length)];
 
-                if (neighbors.length > 0) {
-                    const target = neighbors[Math.floor(Math.random() * neighbors.length)];
-                    const tx = target.dx / target.dist;
-                    const ty = target.dy / target.dist;
-                    p.vx = tx * 8;
-                    p.vy = ty * 8;
-                } else {
-                    p.vx = Math.cos(angle) * 4;
-                    p.vy = Math.sin(angle) * 4;
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = outerRadius;
+                    const sx = this.x + Math.cos(angle) * r;
+                    const sy = this.y + Math.sin(angle) * r;
+
+                    const p = new Particle(sx, sy, 'flare', 'flow', source.hue);
+
+                    if (neighbors.length > 0) {
+                        const target = neighbors[Math.floor(Math.random() * neighbors.length)];
+                        const tx = target.dx / target.dist;
+                        const ty = target.dy / target.dist;
+                        p.vx = tx * 8;
+                        p.vy = ty * 8;
+                    } else {
+                        p.vx = Math.cos(angle) * 4;
+                        p.vy = Math.sin(angle) * 4;
+                    }
+
+                    p.offset = this.time * 0.2;
+                    particles.push(p);
                 }
-
-                p.offset = this.time * 0.2;
-                particles.push(p);
 
             } else {
                 const r = Math.random() * outerRadius;
@@ -411,7 +456,7 @@ class EnergyBall {
                 const sx = this.x + Math.cos(angle) * r;
                 const sy = this.y + Math.sin(angle) * r;
 
-                const p = new Particle(sx, sy, 'flare', 'halo');
+                const p = new Particle(sx, sy, 'flare', 'halo', baseHue);
                 particles.push(p);
             }
         }
@@ -423,7 +468,7 @@ class EnergyBall {
         ctx.shadowColor = `hsla(${baseHue}, 100%, 50%, 0.8)`;
 
         this.coreParticles.forEach(p => {
-            ctx.fillStyle = `hsla(${baseHue}, 100%, 80%, 0.9)`;
+            ctx.fillStyle = `hsla(${p.hue}, 100%, 80%, 0.9)`;
             ctx.fillText(p.char, this.x + p.x, this.y + p.y);
         });
 

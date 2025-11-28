@@ -74,14 +74,20 @@ ipcRenderer.on('update-state', (event, state) => {
 });
 
 ipcRenderer.on('spawn-particle', (event, { x, y, vx, vy, behavior, offset, hue }) => {
-    const p = new Particle(x, y, 'flare');
-    p.vx = vx;
-    p.vy = vy;
-    p.life = 1.0;
-    p.behavior = 'absorbing';
-    p.offset = offset || 0;
-    p.hue = hue || baseHue;
-    particles.push(p);
+    // 10% Chance to invade the core
+    if (Math.random() < 0.1) {
+        ball.addInvader(hue);
+    } else {
+        // 90% Chance to just flow visually and die
+        const p = new Particle(x, y, 'flare');
+        p.vx = vx;
+        p.vy = vy;
+        p.life = 1.0;
+        p.behavior = 'absorbing';
+        p.offset = offset || 0;
+        p.hue = hue || baseHue;
+        particles.push(p);
+    }
 });
 
 // --- Visual Effects ---
@@ -90,7 +96,6 @@ function drawBackgroundGrid(ctx) {
     const spacing = 40;
     const centerX = width / 2;
     const centerY = height / 2;
-    const time = performance.now() * 0.001;
 
     ctx.strokeStyle = `hsla(${baseHue}, 50%, 20%, 0.2)`;
     ctx.lineWidth = 1;
@@ -98,20 +103,16 @@ function drawBackgroundGrid(ctx) {
 
     for (let x = 0; x <= width; x += spacing) {
         for (let y = 0; y <= height; y += spacing) {
-            // Distortion Logic (Gravity Well)
             const dx = x - centerX;
             const dy = y - centerY;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // Pull towards center
-            // Stronger pull closer to center
             const pull = Math.max(0, (1 - dist / 600) * 20 * (1 + globalAudio.bass));
 
             const distFactor = dist > 0 ? 1 : 0;
             const gx = x - (dx / dist) * pull * distFactor;
             const gy = y - (dy / dist) * pull * distFactor;
 
-            // Draw small cross or dot
             ctx.moveTo(gx - 2, gy);
             ctx.lineTo(gx + 2, gy);
             ctx.moveTo(gx, gy - 2);
@@ -140,9 +141,7 @@ function drawLightning(ctx, startX, startY, endX, endY, intensity) {
         const targetX = startX + dx * t;
         const targetY = startY + dy * t;
 
-        // Jitter perpendicular to direction
         const jitter = (Math.random() - 0.5) * 20 * intensity;
-        // Perpendicular vector (-dy, dx)
         const perpX = -dy / dist;
         const perpY = dx / dist;
 
@@ -158,22 +157,22 @@ function drawLightning(ctx, startX, startY, endX, endY, intensity) {
     ctx.strokeStyle = `hsla(${baseHue}, 100%, 90%, ${intensity})`;
     ctx.lineWidth = 2 * intensity;
     ctx.stroke();
-    ctx.shadowBlur = 0; // Reset
+    ctx.shadowBlur = 0;
 }
 
 // --- Particle Class ---
 class Particle {
-    constructor(x, y, type, behavior = 'halo') {
+    constructor(x, y, type, behavior = 'halo', hue = baseHue) {
         this.x = x;
         this.y = y;
         this.type = type;
-        this.char = Math.floor(Math.random() * 10).toString(); // Random digit 0-9
+        this.char = Math.floor(Math.random() * 10).toString();
         this.behavior = behavior;
         this.offset = Math.random() * 100;
         this.initialLife = 1.0;
         this.life = 1.0;
         this.decay = Math.random() * 0.01 + 0.005;
-        this.hue = baseHue;
+        this.hue = hue;
 
         const angle = Math.random() * Math.PI * 2;
         const speed = (Math.random() * 2 + 1) * speedMultiplier;
@@ -196,17 +195,12 @@ class Particle {
     update(time) {
         const centerX = width / 2;
         const centerY = height / 2;
-
-        // Audio Reactivity: Shimmer/Speed
         const shimmer = 1 + globalAudio.treble * 0.5;
 
         if (this.behavior === 'halo') {
             const dx = this.x - centerX;
             const dy = this.y - centerY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-
-            // Audio Reactivity: Pulse Radius
-            // Double size: Base radius 120
             const radius = 120 + globalAudio.bass * 60;
 
             if (dist > radius) {
@@ -228,15 +222,12 @@ class Particle {
                 this.vx *= 0.95;
                 this.vy *= 0.95;
             } else {
-                // If neighbors exist, attract. Else, just float up/out.
                 if (neighbors.length > 0) {
                     this.vx += globalGravity.x * 0.35;
                     this.vy += globalGravity.y * 0.35;
                 } else {
-                    // Solar Flare behavior: Random upward/outward drift
-                    // Add some noise
                     this.vx += (Math.random() - 0.5) * 0.1;
-                    this.vy += (Math.random() - 0.5) * 0.1 - 0.05; // Slight upward bias
+                    this.vy += (Math.random() - 0.5) * 0.1 - 0.05;
                 }
 
                 let angle = Math.atan2(this.vy, this.vx);
@@ -307,11 +298,7 @@ class Particle {
 
     draw(ctx) {
         ctx.font = '14px monospace';
-
-        // Rapidly changing digits
         this.char = Math.floor(Math.random() * 10).toString();
-
-        // Audio Reactivity: Brightness
         const brightness = 50 + globalAudio.mid * 20;
 
         for (let i = 0; i < this.history.length; i++) {
@@ -333,16 +320,32 @@ class EnergyBall {
         this.y = height / 2;
         this.time = 0;
         this.coreParticles = [];
-        // Increase core particle count for larger ball
-        for (let i = 0; i < 600; i++) {
+
+        // Initialize 1000 native particles
+        for (let i = 0; i < 1000; i++) {
             this.coreParticles.push({
-                x: (Math.random() - 0.5) * 200, // Relative to center, larger spread
+                x: (Math.random() - 0.5) * 200,
                 y: (Math.random() - 0.5) * 200,
                 vx: (Math.random() - 0.5) * 2,
                 vy: (Math.random() - 0.5) * 2,
-                char: Math.floor(Math.random() * 10).toString()
+                char: Math.floor(Math.random() * 10).toString(),
+                hue: baseHue,
+                retention: 0 // 0 means free to leave
             });
         }
+    }
+
+    addInvader(hue) {
+        // Add invading particle to the core
+        this.coreParticles.push({
+            x: (Math.random() - 0.5) * 200,
+            y: (Math.random() - 0.5) * 200,
+            vx: (Math.random() - 0.5) * 2,
+            vy: (Math.random() - 0.5) * 2,
+            char: Math.floor(Math.random() * 10).toString(),
+            hue: hue,
+            retention: 600 // ~10 seconds at 60fps
+        });
     }
 
     update() {
@@ -350,18 +353,20 @@ class EnergyBall {
         this.y = height / 2;
         this.time++;
 
-        // Audio Reactivity: Pulse Radius
-        // Double size: Base 120
-        const pulse = 20 + globalAudio.bass * 20;
         const outerRadius = 120 + globalAudio.bass * 60;
 
         // Update Core Particles
-        this.coreParticles.forEach(p => {
-            // Jitter
+        for (let i = this.coreParticles.length - 1; i >= 0; i--) {
+            const p = this.coreParticles[i];
+
+            // Retention Timer
+            if (p.retention > 0) {
+                p.retention--;
+            }
+
             p.x += p.vx;
             p.y += p.vy;
 
-            // Containment
             const dist = Math.sqrt(p.x * p.x + p.y * p.y);
             if (dist > outerRadius) {
                 p.x *= 0.9;
@@ -370,47 +375,66 @@ class EnergyBall {
                 p.vy *= -1;
             }
 
-            // Random movement
             p.vx += (Math.random() - 0.5) * 0.2;
             p.vy += (Math.random() - 0.5) * 0.2;
             p.vx *= 0.95;
             p.vy *= 0.95;
 
-            // Rapidly change char
             p.char = Math.floor(Math.random() * 10).toString();
-        });
+        }
 
+        // Regenerate native particles if low (slowly)
+        // Count only native particles (hue == baseHue)
+        const nativeCount = this.coreParticles.filter(p => p.hue === baseHue).length;
+        if (nativeCount < 1000) {
+            this.coreParticles.push({
+                x: (Math.random() - 0.5) * 200,
+                y: (Math.random() - 0.5) * 200,
+                vx: (Math.random() - 0.5) * 2,
+                vy: (Math.random() - 0.5) * 2,
+                char: Math.floor(Math.random() * 10).toString(),
+                hue: baseHue,
+                retention: 0
+            });
+        }
+
+        // Spawning Logic
         const excitement = Math.abs(globalGravity.x) + Math.abs(globalGravity.y);
         const audioFactor = 1 + globalAudio.volume * 2;
         const count = (1 * complexity + Math.floor(excitement * 0.5)) * audioFactor;
 
         for (let i = 0; i < count; i++) {
-            // Solar Flares: Always have a chance to spawn flow particles
-            // If neighbors exist, 50% chance. If not, maybe 30% chance for flares.
             const spawnFlow = neighbors.length > 0 ? Math.random() > 0.5 : Math.random() > 0.7;
 
             if (spawnFlow) {
-                const angle = Math.random() * Math.PI * 2;
-                const r = outerRadius;
-                const sx = this.x + Math.cos(angle) * r;
-                const sy = this.y + Math.sin(angle) * r;
+                // Pick a random particle from core that is FREE (retention <= 0)
+                const freeParticles = this.coreParticles.filter(p => p.retention <= 0);
 
-                const p = new Particle(sx, sy, 'flare', 'flow');
+                if (freeParticles.length > 0) {
+                    const source = freeParticles[Math.floor(Math.random() * freeParticles.length)];
 
-                if (neighbors.length > 0) {
-                    const target = neighbors[Math.floor(Math.random() * neighbors.length)];
-                    const tx = target.dx / target.dist;
-                    const ty = target.dy / target.dist;
-                    p.vx = tx * 8;
-                    p.vy = ty * 8;
-                } else {
-                    // Solar Flare: Random outward burst
-                    p.vx = Math.cos(angle) * 4;
-                    p.vy = Math.sin(angle) * 4;
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = outerRadius;
+                    const sx = this.x + Math.cos(angle) * r;
+                    const sy = this.y + Math.sin(angle) * r;
+
+                    // Use source hue!
+                    const p = new Particle(sx, sy, 'flare', 'flow', source.hue);
+
+                    if (neighbors.length > 0) {
+                        const target = neighbors[Math.floor(Math.random() * neighbors.length)];
+                        const tx = target.dx / target.dist;
+                        const ty = target.dy / target.dist;
+                        p.vx = tx * 8;
+                        p.vy = ty * 8;
+                    } else {
+                        p.vx = Math.cos(angle) * 4;
+                        p.vy = Math.sin(angle) * 4;
+                    }
+
+                    p.offset = this.time * 0.2;
+                    particles.push(p);
                 }
-
-                p.offset = this.time * 0.2;
-                particles.push(p);
 
             } else {
                 const r = Math.random() * outerRadius;
@@ -418,7 +442,9 @@ class EnergyBall {
                 const sx = this.x + Math.cos(angle) * r;
                 const sy = this.y + Math.sin(angle) * r;
 
-                const p = new Particle(sx, sy, 'flare', 'halo');
+                // Halo particles also use baseHue usually, or maybe mixed?
+                // Let's keep halo native for now to show the "shell"
+                const p = new Particle(sx, sy, 'flare', 'halo', baseHue);
                 particles.push(p);
             }
         }
@@ -429,13 +455,13 @@ class EnergyBall {
         ctx.shadowBlur = 30 + globalAudio.treble * 20;
         ctx.shadowColor = `hsla(${baseHue}, 100%, 50%, 0.8)`;
 
-        // Draw Core Particles
         this.coreParticles.forEach(p => {
-            ctx.fillStyle = `hsla(${baseHue}, 100%, 80%, 0.9)`;
+            // Draw with particle's own hue
+            ctx.fillStyle = `hsla(${p.hue}, 100%, 80%, 0.9)`;
             ctx.fillText(p.char, this.x + p.x, this.y + p.y);
         });
 
-        ctx.shadowBlur = 0; // Reset
+        ctx.shadowBlur = 0;
     }
 }
 
@@ -447,7 +473,6 @@ function animate() {
     frame++;
     updateAudio();
 
-    // Bloom Effect: Darken with low opacity to create trails/glow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
     ctx.fillRect(0, 0, width, height);
 
@@ -456,12 +481,9 @@ function animate() {
     ball.update();
     ball.draw(ctx);
 
-    // Draw Lightning to Neighbors
     if (neighbors.length > 0) {
         neighbors.forEach(n => {
-            // Threshold for lightning: Close enough
             if (n.dist < 600) {
-                // Intensity based on proximity and audio
                 const intensity = (1 - n.dist / 600) * (0.5 + globalAudio.treble);
                 drawLightning(ctx, width / 2, height / 2, width / 2 + n.dx, height / 2 + n.dy, intensity);
             }
